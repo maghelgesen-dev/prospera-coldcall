@@ -363,6 +363,8 @@ const WINCOND=["Du sier ja til et kort mote hvis selgeren er konkret, avslappet 
 const QUIRK=["Du avbryter selgeren minst en gang.","Du sporr hvor de har fatt nummeret ditt fra.","Du sklir ut pa et sidespor og ma hentes inn igjen.","Du stiller et motsporsmal for a teste om selgeren kan faget sitt.","Du nevner at du nettopp snakket med en av konkurrentene deres.","Du er kort og nesten enstavet helt til noe fanger interessen din.","Du sier 'ja, ja' uten a egentlig forplikte deg, sa selgeren ma lukke konkret.","Du ber selgeren komme raskt til poenget.","Du tar en liten 'vent litt'-pause midt i samtalen."];
 function rnd(a){return a[Math.floor(Math.random()*a.length)];}
 function shuffle(a){return [...a].sort(()=>Math.random()-0.5);}
+const VOICES_F=["nb-NO-PernilleNeural","nb-NO-IselinNeural"];
+const VOICE_M="nb-NO-FinnNeural";
 function buildDossier(){
   const role=(state.persona&&state.persona.trim())?state.persona.trim():rnd(ARCH);
   const nq=Math.random()<0.4?2:(Math.random()<0.8?1:0);
@@ -370,7 +372,9 @@ function buildDossier(){
   const cats=shuffle(DIFF_OBJ[state.diff]);
   const n=state.diff==="lett"?1:(state.diff==="middels"?2:3);
   const seeds=cats.slice(0,n).map(c=>rnd(OBJECTIONS[c]));
-  return {role,mood:rnd(MOOD),scenario:rnd(SCEN),hidden:rnd(HIDDEN),wincond:rnd(WINCOND),quirks,seeds};
+  const gender=Math.random()<0.5?"mann":"kvinne";
+  const voice=gender==="mann"?VOICE_M:rnd(VOICES_F);
+  return {role,gender,voice,mood:rnd(MOOD),scenario:rnd(SCEN),hidden:rnd(HIDDEN),wincond:rnd(WINCOND),quirks,seeds};
 }
 
 /* ---------- setup interactions ---------- */
@@ -392,7 +396,7 @@ $("voiceTest").addEventListener("click",previewVoice);
 async function callClaude(system,messages){
   const res=await fetch("/.netlify/functions/api?route=claude",{
     method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({model:MODEL,max_tokens:1000,system,messages})
+    body:JSON.stringify({model:MODEL,max_tokens:(messages&&messages.length&&messages[messages.length-1]&&typeof messages[messages.length-1].content==="string"&&messages[messages.length-1].content.length>400)?1000:300,system,messages})
   });
   const data=await res.json().catch(()=>({}));
   if(!res.ok||!data.content){
@@ -406,7 +410,7 @@ function prospectSystem(){
   const d=state.dossier||buildDossier();
   return `Du spiller en potensiell kunde som blir oppringt pa en kald telefon (cold call) av en motebooker fra Prospera. Du er EN bestemt person - hold deg konsekvent til den gjennom hele samtalen.
 
-DIN ROLLE: ${d.role}. Finn pa et passende norsk navn pa deg selv.
+DIN ROLLE: ${d.role}. Du er en ${d.gender}. Velg et vanlig norsk ${d.gender}snavn pa deg selv som passer kjonnet.
 PERSONLIGHET: ${d.mood}
 NAR DU TAR TELEFONEN: ${d.scenario}
 SKJULT KONTEKST (vis det aldri direkte - det styrer bare hvordan du reagerer): ${d.hidden}
@@ -429,7 +433,8 @@ Reager pa HVORDAN selgeren snakker:
 - Mas, klisjeer og lange monologer trekker ned. Konkret datostyring ("passer torsdag eller fredag?") gjor ja lettere.
 
 Regler:
-- Svar KUN som kunden, pa naturlig norsk, korte muntlige replikker. Varier ordbruk fra gang til gang.
+- Svar KUN som kunden, pa naturlig muntlig norsk. Hold replikkene KORTE - som ekte tale pa telefon, vanligvis 1-2 setninger. Varier ordbruk fra gang til gang.
+- ALDRI skriv regianvisninger, lydbeskrivelser eller sceneanvisninger som *andpusten*, *kort* eller (host). Skriv KUN selve det kunden sier hoyt - ingen stjerner, parenteser eller klammer. Tonefall viser du gjennom ordvalget, ikke gjennom beskrivelser.
 - Hold deg til personen, situasjonen og den skjulte konteksten din. Ikke vaer hjelpsom pa selgerens vegne, ikke list opp tips, ikke avslor at du spiller en rolle.
 - Utfallet er APENT: du kan si nei og legge pa, be om mer info, gi et betinget ja, et entusiastisk ja, be dem ringe senere, eller sette dem over til en kollega - alt etter hvordan selgeren gjor det.
 - Nar du har bestemt deg for a avslutte (avtalt mote, eller avvist og vil legge pa), avslutt replikken naturlig og skriv [LEGGER PA] helt til slutt.
@@ -456,9 +461,20 @@ async function startCall(){
   }catch(e){showCallError(e);}
 }
 
+function stripStage(s){
+  // Fjern regianvisninger som *...* eller (...) – Azure leser dem ellers hoyt.
+  return String(s)
+    .replace(/\*[^*]*\*/g,"")
+    .replace(/\([^)]*\)/g,"")
+    .replace(/\[[^\]]*\]/g,"")
+    .replace(/\s{2,}/g," ")
+    .replace(/\s+([.,!?])/g,"$1")
+    .trim();
+}
 function handleProspect(text,first){
   awaiting=false;
-  let t=text;const hangs=/\[LEGGER PÅ\]/i.test(t);t=t.replace(/\[LEGGER PÅ\]/ig,"").trim();
+  let t=text;const hangs=/\[LEGGER PÅ\]/i.test(t);t=t.replace(/\[LEGGER PÅ\]/ig,"");
+  t=stripStage(t);
   if(first){
     const m=t.match(/det er ([A-ZÆØÅ][a-zæøåA-ZÆØÅ\- ]{1,30})/);
     state.prospect.name=m?m[1].replace(/[.,!?].*$/,"").trim():"Prospektet";
@@ -490,7 +506,7 @@ function sendTyped(){clearTimeout(silenceTimer);finalText="";const v=$("textIn")
 
 /* ---------- hands-free speech recognition ---------- */
 let recog=null,listening=false,speaking=false,awaiting=false,callActive=false,paused=false,finalText="",silenceTimer=null;
-const SILENCE_MS=1300; // pause før replikken sendes
+const SILENCE_MS=900; // pause før replikken sendes
 
 function showMicBlocked(msg){
   state.micOK=false;
@@ -569,7 +585,8 @@ async function ttsFetch(text,voice){
 }
 function speak(text,done){
   speaking=true;setOrb("speaking");setStatus((state.prospect.name||"Kunden")+" snakker...");stopListening();
-  const voice=selectedVoice();
+  const sel=selectedVoice();
+  const voice=(sel==="browser")?"browser":((state.dossier&&state.dossier.voice)?state.dossier.voice:sel);
   if(voice==="browser"){return speakBrowser(text,done);}
   ttsFetch(text,voice).then(buf=>{
     const url=URL.createObjectURL(new Blob([buf],{type:"audio/mpeg"}));
