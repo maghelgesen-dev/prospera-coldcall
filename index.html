@@ -263,6 +263,7 @@
       <button class="mic" id="micBtn" title="Pause / fortsett">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
       </button>
+      <button class="btn btn-ghost" id="doneBtn" style="padding:0 20px;font-size:14px" title="Send det du har sagt">Ferdig – send</button>
       <button class="hangup" id="hangBtn" title="Legg på">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 9c5-3 13-3 18 0 1 .6 1 1.7.4 2.5l-1.6 2c-.5.6-1.4.8-2 .3l-2.2-1.4a1.4 1.4 0 0 1-.6-1.6l.3-1.2a14 14 0 0 0-6.6 0l.3 1.2a1.4 1.4 0 0 1-.6 1.6L6.2 13.8c-.7.5-1.6.3-2-.3l-1.6-2C2 10.7 2.1 9.6 3 9z"/></svg>
       </button>
@@ -387,6 +388,7 @@ $("preset").addEventListener("click",e=>{const b=e.target.closest(".opt");if(!b)
 $("startBtn").addEventListener("click",startCall);
 $("againBtn").addEventListener("click",newCall);
 $("hangBtn").addEventListener("click",endCall);
+$("doneBtn").addEventListener("click",flushSend);
 $("micBtn").addEventListener("click",togglePause);
 $("sendBtn").addEventListener("click",sendTyped);
 $("textIn").addEventListener("keydown",e=>{if(e.key==="Enter")sendTyped();});
@@ -506,7 +508,7 @@ function sendTyped(){clearTimeout(silenceTimer);finalText="";const v=$("textIn")
 
 /* ---------- hands-free speech recognition ---------- */
 let recog=null,listening=false,speaking=false,awaiting=false,callActive=false,paused=false,finalText="",silenceTimer=null;
-const SILENCE_MS=900; // pause før replikken sendes
+const SILENCE_MS=2200; // pause før replikken sendes (lang nok til å tenke midt i en setning)
 
 function showMicBlocked(msg){
   state.micOK=false;
@@ -528,9 +530,9 @@ function initSpeech(){
     for(let k=e.resultIndex;k<e.results.length;k++){const r=e.results[k];if(r.isFinal)f+=r[0].transcript+" ";else i+=r[0].transcript;}
     if(f)finalText+=f;
     const shown=(finalText+i).trim();
-    if(shown)setStatus("«"+shown+"»");
+    if(shown)setStatus("«"+shown+"» — trykk «Ferdig» når du er ferdig");
     clearTimeout(silenceTimer);
-    if(finalText.trim())silenceTimer=setTimeout(flushSend,SILENCE_MS);
+    if(shown)silenceTimer=setTimeout(flushSend,SILENCE_MS);
   };
   recog.onend=()=>{
     listening=false;$("micBtn").classList.remove("rec");
@@ -546,6 +548,7 @@ function startListening(){
   if(!state.micOK){setStatus("Skriv svaret ditt under og trykk Enter");return;}
   if(!recog||!callActive||paused||speaking||awaiting||listening)return;
   finalText="";
+  sttStart();
   try{recog.start();}catch(e){/* allerede i gang */}
 }
 function stopListening(){
@@ -553,12 +556,17 @@ function stopListening(){
   if(recog&&listening){try{recog.stop();}catch(e){}}
   listening=false;$("micBtn").classList.remove("rec");
 }
-function flushSend(){
+async function flushSend(){
   clearTimeout(silenceTimer);
-  const t=finalText.trim();finalText="";
-  if(!t){return;}
+  sttStop();
+  const fallback=finalText.trim(); finalText="";
   stopListening();
-  sendUser(t);
+  setStatus("Tolker det du sa...");
+  let text="";
+  try{ text=await azureStt(); }catch(e){}
+  if(!text) text=fallback;
+  if(!text){ startListening(); return; }
+  sendUser(text);
 }
 function togglePause(){
   if(!state.micOK)return;
@@ -799,7 +807,15 @@ async function startRecording(){
     audioCtx=new (window.AudioContext||window.webkitAudioContext)();
     if(audioCtx.state==="suspended")await audioCtx.resume();
     mixDest=audioCtx.createMediaStreamDestination();
-    audioCtx.createMediaStreamSource(micStream).connect(mixDest);
+    micSource=audioCtx.createMediaStreamSource(micStream);
+    micSource.connect(mixDest);
+    sttSR=audioCtx.sampleRate;
+    try{
+      sttNode=audioCtx.createScriptProcessor(4096,1,1);
+      sttZero=audioCtx.createGain(); sttZero.gain.value=0;
+      micSource.connect(sttNode); sttNode.connect(sttZero); sttZero.connect(audioCtx.destination);
+      sttNode.onaudioprocess=function(e){ if(!sttCap)return; sttChunks.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+    }catch(e){ sttNode=null; }
     recChunks=[];
     var mime=recMime();
     recorder=new MediaRecorder(mixDest.stream, mime?{mimeType:mime}:undefined);
@@ -822,6 +838,46 @@ function stopRecording(){
   });
 }
 function blobToBase64(blob){return new Promise(function(res,rej){var r=new FileReader();r.onload=function(){res(String(r.result).split(",")[1]||"");};r.onerror=rej;r.readAsDataURL(blob);});}
+
+/* ====================== AZURE TALE-TIL-TEKST ====================== */
+var micSource=null,sttNode=null,sttZero=null,sttChunks=[],sttCap=false,sttSR=48000;
+function sttStart(){ sttChunks=[]; sttCap=true; }
+function sttStop(){ sttCap=false; }
+function sttCollect(){
+  var len=0,i; for(i=0;i<sttChunks.length;i++) len+=sttChunks[i].length;
+  if(!len){ return null; }
+  var data=new Float32Array(len),off=0;
+  for(i=0;i<sttChunks.length;i++){ data.set(sttChunks[i],off); off+=sttChunks[i].length; }
+  sttChunks=[];
+  var ds=sttDownsample(data,sttSR,16000);
+  if(ds.length < 16000*0.3){ return null; } // mindre enn ca 0,3 sek
+  return sttEncodeWav(ds,16000);
+}
+function sttDownsample(buf,inRate,outRate){
+  if(outRate>=inRate) return buf;
+  var ratio=inRate/outRate, n=Math.round(buf.length/ratio), out=new Float32Array(n),i;
+  for(i=0;i<n;i++){ out[i]=buf[Math.floor(i*ratio)]; }
+  return out;
+}
+function sttEncodeWav(samples,rate){
+  var b=new ArrayBuffer(44+samples.length*2), v=new DataView(b), i;
+  function ws(o,s){ for(var k=0;k<s.length;k++) v.setUint8(o+k,s.charCodeAt(k)); }
+  ws(0,"RIFF"); v.setUint32(4,36+samples.length*2,true); ws(8,"WAVE"); ws(12,"fmt ");
+  v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+  v.setUint32(24,rate,true); v.setUint32(28,rate*2,true); v.setUint16(32,2,true); v.setUint16(34,16,true);
+  ws(36,"data"); v.setUint32(40,samples.length*2,true);
+  var off=44; for(i=0;i<samples.length;i++){ var s=Math.max(-1,Math.min(1,samples[i])); v.setInt16(off,s<0?s*0x8000:s*0x7FFF,true); off+=2; }
+  return new Blob([v],{type:"audio/wav"});
+}
+async function azureStt(){
+  var wav=sttCollect(); if(!wav) return "";
+  try{
+    var b64=await blobToBase64(wav);
+    var r=await fetch("/.netlify/functions/api?route=stt",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({audioBase64:b64})});
+    var d=await r.json().catch(()=>({}));
+    return (d&&d.ok&&d.text)?d.text:"";
+  }catch(e){ return ""; }
+}
 
 /* ====================== LAGRE SAMTALE ====================== */
 async function saveSession(f,audioBlob,transcript){
