@@ -12,6 +12,7 @@ export default async (req) => {
   try {
     if (route === "claude") return await handleClaude(b);
     if (route === "tts") return await handleTts(b);
+    if (route === "stt") return await handleStt(b);
     if (route === "login") return handleLogin(b);
     if (route === "save-session") return await handleSave(b);
     if (route === "list-sessions") return await handleList(b);
@@ -61,6 +62,29 @@ async function handleTts(b) {
   if (!r.ok) { const t = await r.text(); return new Response("Azure-feil (" + r.status + "): " + t, { status: r.status }); }
   const buf = await r.arrayBuffer();
   return new Response(buf, { status: 200, headers: { "content-type": "audio/mpeg" } });
+}
+
+/* ---------- Tale-til-tekst (Azure STT) ---------- */
+async function handleStt(b) {
+  const key = process.env.AZURE_SPEECH_KEY, region = process.env.AZURE_SPEECH_REGION;
+  if (!key || !region) return j({ ok: false, error: "Mangler AZURE_SPEECH_KEY / AZURE_SPEECH_REGION." }, 500);
+  if (!b.audioBase64) return j({ ok: false, error: "Ingen lyd mottatt." }, 400);
+  const buf = Buffer.from(b.audioBase64, "base64");
+  const url = `https://${region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=nb-NO&format=detailed`;
+  const r = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Ocp-Apim-Subscription-Key": key,
+      "Content-Type": "audio/wav; codecs=audio/pcm; samplerate=16000",
+      "Accept": "application/json"
+    },
+    body: buf
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) return j({ ok: false, error: "Azure STT " + r.status }, 502);
+  let text = data.DisplayText || "";
+  if (!text && Array.isArray(data.NBest) && data.NBest[0]) text = data.NBest[0].Display || data.NBest[0].Lexical || "";
+  return j({ ok: true, text }, 200);
 }
 
 /* ---------- Innlogging ---------- */
