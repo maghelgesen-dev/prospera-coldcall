@@ -168,6 +168,12 @@
   .tx-pre{white-space:pre-wrap;font-family:var(--sans);font-size:13px;color:var(--text);line-height:1.5;margin-top:10px}
   .err{background:#2a1714;border:1px solid #5a302a;color:#e0b0a4;border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.5;margin-bottom:18px}
   .notice{background:var(--bg-2);border:1px solid var(--gold-2);border-left:3px solid var(--gold);color:var(--text);border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.5;margin-bottom:18px}
+  .miccheck{text-align:center;padding:10px 0 4px}
+  .miccheck h2{font-family:var(--serif);font-weight:normal;font-size:22px;margin:0 0 8px}
+  .meterwrap{height:14px;background:var(--bg-2);border:1px solid var(--line);border-radius:8px;overflow:hidden;margin:20px auto 10px;max-width:340px}
+  .meter{height:100%;width:0%;background:linear-gradient(90deg,var(--gold-2),var(--ok));transition:width .08s linear}
+  .miccheck .btn{max-width:340px;margin:10px auto 0}
+  .miccheck .status{margin:8px 0}
   .footer-note{color:var(--muted);font-size:12px;text-align:center;margin-top:30px;line-height:1.5}
   @media (prefers-reduced-motion:reduce){.orb::before,.orb::after{animation:none}}
 </style>
@@ -249,6 +255,18 @@
       <div class="badge" id="diffBadge">Middels</div>
     </div>
 
+    <div id="micCheck" class="miccheck">
+      <h2>Sjekk mikrofonen</h2>
+      <p class="lede" style="margin:0 auto 4px;max-width:42ch">Trykk «Slå på mikrofon», gi tilgang, og si noen ord. Når streken under beveger seg, fanges lyden – da kan du starte samtalen.</p>
+      <div class="meterwrap"><div class="meter" id="micMeter"></div></div>
+      <div id="micCheckStatus" class="status">Mikrofon er ikke slått på ennå</div>
+      <button class="btn btn-ghost" id="armMicBtn">Slå på mikrofon</button>
+      <button class="btn btn-gold hidden" id="beginCallBtn">Start samtale</button>
+      <p class="hint" style="margin-top:14px">Vil du heller skrive enn å snakke?</p>
+      <button class="btn btn-ghost" id="skipMicBtn">Hopp over – jeg skriver</button>
+    </div>
+
+    <div id="callLive" class="hidden">
     <div class="stage">
       <div class="orb live" id="orb">
         <div class="core"></div>
@@ -263,6 +281,7 @@
       <button class="mic" id="micBtn" title="Pause / fortsett">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
       </button>
+      <button class="btn btn-ghost" id="doneBtn" style="padding:0 20px;font-size:14px" title="Send det du har sagt">Ferdig – send</button>
       <button class="hangup" id="hangBtn" title="Legg på">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 9c5-3 13-3 18 0 1 .6 1 1.7.4 2.5l-1.6 2c-.5.6-1.4.8-2 .3l-2.2-1.4a1.4 1.4 0 0 1-.6-1.6l.3-1.2a14 14 0 0 0-6.6 0l.3 1.2a1.4 1.4 0 0 1-.6 1.6L6.2 13.8c-.7.5-1.6.3-2-.3l-1.6-2C2 10.7 2.1 9.6 3 9z"/></svg>
       </button>
@@ -274,6 +293,7 @@
     </div>
 
     <div class="log" id="log"></div>
+    </div>
   </section>
 
   <!-- ============ FEEDBACK ============ -->
@@ -363,6 +383,8 @@ const WINCOND=["Du sier ja til et kort mote hvis selgeren er konkret, avslappet 
 const QUIRK=["Du avbryter selgeren minst en gang.","Du sporr hvor de har fatt nummeret ditt fra.","Du sklir ut pa et sidespor og ma hentes inn igjen.","Du stiller et motsporsmal for a teste om selgeren kan faget sitt.","Du nevner at du nettopp snakket med en av konkurrentene deres.","Du er kort og nesten enstavet helt til noe fanger interessen din.","Du sier 'ja, ja' uten a egentlig forplikte deg, sa selgeren ma lukke konkret.","Du ber selgeren komme raskt til poenget.","Du tar en liten 'vent litt'-pause midt i samtalen."];
 function rnd(a){return a[Math.floor(Math.random()*a.length)];}
 function shuffle(a){return [...a].sort(()=>Math.random()-0.5);}
+const VOICES_F=["nb-NO-PernilleNeural","nb-NO-IselinNeural"];
+const VOICE_M="nb-NO-FinnNeural";
 function buildDossier(){
   const role=(state.persona&&state.persona.trim())?state.persona.trim():rnd(ARCH);
   const nq=Math.random()<0.4?2:(Math.random()<0.8?1:0);
@@ -370,7 +392,9 @@ function buildDossier(){
   const cats=shuffle(DIFF_OBJ[state.diff]);
   const n=state.diff==="lett"?1:(state.diff==="middels"?2:3);
   const seeds=cats.slice(0,n).map(c=>rnd(OBJECTIONS[c]));
-  return {role,mood:rnd(MOOD),scenario:rnd(SCEN),hidden:rnd(HIDDEN),wincond:rnd(WINCOND),quirks,seeds};
+  const gender=Math.random()<0.5?"mann":"kvinne";
+  const voice=gender==="mann"?VOICE_M:rnd(VOICES_F);
+  return {role,gender,voice,mood:rnd(MOOD),scenario:rnd(SCEN),hidden:rnd(HIDDEN),wincond:rnd(WINCOND),quirks,seeds};
 }
 
 /* ---------- setup interactions ---------- */
@@ -381,8 +405,12 @@ $("preset").addEventListener("click",e=>{const b=e.target.closest(".opt");if(!b)
   const p=PRESETS[b.dataset.p];$("value").value=p.value;$("persona").value=p.persona;});
 
 $("startBtn").addEventListener("click",startCall);
+$("armMicBtn").addEventListener("click",armMic);
+$("beginCallBtn").addEventListener("click",()=>beginCall(false));
+$("skipMicBtn").addEventListener("click",()=>beginCall(true));
 $("againBtn").addEventListener("click",newCall);
 $("hangBtn").addEventListener("click",endCall);
+$("doneBtn").addEventListener("click",flushSend);
 $("micBtn").addEventListener("click",togglePause);
 $("sendBtn").addEventListener("click",sendTyped);
 $("textIn").addEventListener("keydown",e=>{if(e.key==="Enter")sendTyped();});
@@ -406,7 +434,7 @@ function prospectSystem(){
   const d=state.dossier||buildDossier();
   return `Du spiller en potensiell kunde som blir oppringt pa en kald telefon (cold call) av en motebooker fra Prospera. Du er EN bestemt person - hold deg konsekvent til den gjennom hele samtalen.
 
-DIN ROLLE: ${d.role}. Finn pa et passende norsk navn pa deg selv.
+DIN ROLLE: ${d.role}. Du er en ${d.gender}. Velg et vanlig norsk ${d.gender}snavn pa deg selv som passer kjonnet.
 PERSONLIGHET: ${d.mood}
 NAR DU TAR TELEFONEN: ${d.scenario}
 SKJULT KONTEKST (vis det aldri direkte - det styrer bare hvordan du reagerer): ${d.hidden}
@@ -446,11 +474,62 @@ async function startCall(){
   state.dossier=buildDossier();
   $("setup").classList.add("hidden");$("call").classList.remove("hidden");
   $("diffBadge").textContent=DIFF_LABEL[state.diff];
+  // Vis mikrofontest – samtalen starter forst ved «Start samtale»
+  $("micCheck").classList.remove("hidden");
+  $("callLive").classList.add("hidden");
+  $("beginCallBtn").classList.add("hidden");
+  $("micMeter").style.width="0%";
+  $("micCheckStatus").textContent="Mikrofon er ikke slatt pa enna";
+  $("armMicBtn").classList.remove("hidden");
+  $("armMicBtn").disabled=false;$("armMicBtn").textContent="Sla pa mikrofon";
+}
+
+// Steg 1: sla pa mikrofon + lever niva-maler (eget klikk = palitelig oppstart)
+async function armMic(){
+  $("armMicBtn").disabled=true;$("armMicBtn").textContent="Ber om tilgang...";
+  $("micCheckStatus").textContent="Gi mikrofontilgang i nettleseren...";
+  await startRecording(); // henter mikrofon, vekker lydsystem, setter opp opptak + STT
+  if(!state.micOK || !micStream || !audioCtx){
+    $("micCheckStatus").textContent="Fikk ikke tilgang til mikrofonen. Du kan skrive i stedet.";
+    $("armMicBtn").classList.add("hidden");
+    beginCall(true); // ga videre i skrive-modus
+    return;
+  }
+  try{ if(audioCtx.state==="suspended") await audioCtx.resume(); }catch(e){}
+  startMeter();
+  $("armMicBtn").classList.add("hidden");
+  $("beginCallBtn").classList.remove("hidden");
+  $("micCheckStatus").textContent="Bra! Si noen ord – ser du streken bevege seg? Trykk «Start samtale».";
+}
+
+// Niva-maler
+var meterAnalyser=null,meterRAF=null;
+function startMeter(){
+  try{
+    meterAnalyser=audioCtx.createAnalyser();meterAnalyser.fftSize=512;
+    micSource.connect(meterAnalyser);
+    const buf=new Uint8Array(meterAnalyser.frequencyBinCount);
+    const tick=()=>{
+      meterAnalyser.getByteTimeDomainData(buf);
+      let peak=0;for(let i=0;i<buf.length;i++){const d=Math.abs(buf[i]-128);if(d>peak)peak=d;}
+      const pct=Math.min(100,Math.round((peak/128)*250));
+      $("micMeter").style.width=pct+"%";
+      meterRAF=requestAnimationFrame(tick);
+    };
+    tick();
+  }catch(e){}
+}
+function stopMeter(){ if(meterRAF)cancelAnimationFrame(meterRAF);meterRAF=null; }
+
+// Steg 2: start selve samtalen
+async function beginCall(textOnly){
+  stopMeter();
+  $("micCheck").classList.add("hidden");
+  $("callLive").classList.remove("hidden");
   callActive=true;paused=false;speaking=false;awaiting=false;
-  setStatus("Kobler til…");setOrb("");
+  setStatus("Kobler til...");setOrb("");
   initSpeech();
-  // be om mikrofontilgang mens vi fortsatt er i klikket (kreves for hands-free etterpå)
-  if(state.micOK){ await startRecording(); }
+  if(textOnly){ showMicBlocked(MIC_MSG); }
   try{
     const first=await callClaude(prospectSystem(),[{role:"user",content:"[Selgeren ringer deg opp nå. Du tar telefonen.]"}]);
     handleProspect(first,true);
@@ -502,7 +581,7 @@ function sendTyped(){clearTimeout(silenceTimer);finalText="";const v=$("textIn")
 
 /* ---------- hands-free speech recognition ---------- */
 let recog=null,listening=false,speaking=false,awaiting=false,callActive=false,paused=false,finalText="",silenceTimer=null;
-const SILENCE_MS=1300; // pause før replikken sendes
+const SILENCE_MS=2200; // pause før replikken sendes (lang nok til å tenke midt i en setning)
 
 function showMicBlocked(msg){
   state.micOK=false;
@@ -524,9 +603,9 @@ function initSpeech(){
     for(let k=e.resultIndex;k<e.results.length;k++){const r=e.results[k];if(r.isFinal)f+=r[0].transcript+" ";else i+=r[0].transcript;}
     if(f)finalText+=f;
     const shown=(finalText+i).trim();
-    if(shown)setStatus("«"+shown+"»");
+    if(shown)setStatus("«"+shown+"» — trykk «Ferdig» når du er ferdig");
     clearTimeout(silenceTimer);
-    if(finalText.trim())silenceTimer=setTimeout(flushSend,SILENCE_MS);
+    if(shown)silenceTimer=setTimeout(flushSend,SILENCE_MS);
   };
   recog.onend=()=>{
     listening=false;$("micBtn").classList.remove("rec");
@@ -542,6 +621,7 @@ function startListening(){
   if(!state.micOK){setStatus("Skriv svaret ditt under og trykk Enter");return;}
   if(!recog||!callActive||paused||speaking||awaiting||listening)return;
   finalText="";
+  sttStart();
   try{recog.start();}catch(e){/* allerede i gang */}
 }
 function stopListening(){
@@ -549,12 +629,17 @@ function stopListening(){
   if(recog&&listening){try{recog.stop();}catch(e){}}
   listening=false;$("micBtn").classList.remove("rec");
 }
-function flushSend(){
+async function flushSend(){
   clearTimeout(silenceTimer);
-  const t=finalText.trim();finalText="";
-  if(!t){return;}
+  sttStop();
+  const fallback=finalText.trim(); finalText="";
   stopListening();
-  sendUser(t);
+  setStatus("Tolker det du sa...");
+  let text="";
+  try{ text=await azureStt(); }catch(e){}
+  if(!text) text=fallback;
+  if(!text){ startListening(); return; }
+  sendUser(text);
 }
 function togglePause(){
   if(!state.micOK)return;
@@ -581,7 +666,8 @@ async function ttsFetch(text,voice){
 }
 function speak(text,done){
   speaking=true;setOrb("speaking");setStatus((state.prospect.name||"Kunden")+" snakker...");stopListening();
-  const voice=selectedVoice();
+  const sel=selectedVoice();
+  const voice=(sel==="browser")?"browser":((state.dossier&&state.dossier.voice)?state.dossier.voice:sel);
   if(voice==="browser"){return speakBrowser(text,done);}
   ttsFetch(text,voice).then(buf=>{
     const url=URL.createObjectURL(new Blob([buf],{type:"audio/mpeg"}));
@@ -794,7 +880,15 @@ async function startRecording(){
     audioCtx=new (window.AudioContext||window.webkitAudioContext)();
     if(audioCtx.state==="suspended")await audioCtx.resume();
     mixDest=audioCtx.createMediaStreamDestination();
-    audioCtx.createMediaStreamSource(micStream).connect(mixDest);
+    micSource=audioCtx.createMediaStreamSource(micStream);
+    micSource.connect(mixDest);
+    sttSR=audioCtx.sampleRate;
+    try{
+      sttNode=audioCtx.createScriptProcessor(4096,1,1);
+      sttZero=audioCtx.createGain(); sttZero.gain.value=0;
+      micSource.connect(sttNode); sttNode.connect(sttZero); sttZero.connect(audioCtx.destination);
+      sttNode.onaudioprocess=function(e){ if(!sttCap)return; sttChunks.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+    }catch(e){ sttNode=null; }
     recChunks=[];
     var mime=recMime();
     recorder=new MediaRecorder(mixDest.stream, mime?{mimeType:mime}:undefined);
@@ -817,6 +911,46 @@ function stopRecording(){
   });
 }
 function blobToBase64(blob){return new Promise(function(res,rej){var r=new FileReader();r.onload=function(){res(String(r.result).split(",")[1]||"");};r.onerror=rej;r.readAsDataURL(blob);});}
+
+/* ====================== AZURE TALE-TIL-TEKST ====================== */
+var micSource=null,sttNode=null,sttZero=null,sttChunks=[],sttCap=false,sttSR=48000;
+function sttStart(){ sttChunks=[]; sttCap=true; }
+function sttStop(){ sttCap=false; }
+function sttCollect(){
+  var len=0,i; for(i=0;i<sttChunks.length;i++) len+=sttChunks[i].length;
+  if(!len){ return null; }
+  var data=new Float32Array(len),off=0;
+  for(i=0;i<sttChunks.length;i++){ data.set(sttChunks[i],off); off+=sttChunks[i].length; }
+  sttChunks=[];
+  var ds=sttDownsample(data,sttSR,16000);
+  if(ds.length < 16000*0.3){ return null; } // mindre enn ca 0,3 sek
+  return sttEncodeWav(ds,16000);
+}
+function sttDownsample(buf,inRate,outRate){
+  if(outRate>=inRate) return buf;
+  var ratio=inRate/outRate, n=Math.round(buf.length/ratio), out=new Float32Array(n),i;
+  for(i=0;i<n;i++){ out[i]=buf[Math.floor(i*ratio)]; }
+  return out;
+}
+function sttEncodeWav(samples,rate){
+  var b=new ArrayBuffer(44+samples.length*2), v=new DataView(b), i;
+  function ws(o,s){ for(var k=0;k<s.length;k++) v.setUint8(o+k,s.charCodeAt(k)); }
+  ws(0,"RIFF"); v.setUint32(4,36+samples.length*2,true); ws(8,"WAVE"); ws(12,"fmt ");
+  v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+  v.setUint32(24,rate,true); v.setUint32(28,rate*2,true); v.setUint16(32,2,true); v.setUint16(34,16,true);
+  ws(36,"data"); v.setUint32(40,samples.length*2,true);
+  var off=44; for(i=0;i<samples.length;i++){ var s=Math.max(-1,Math.min(1,samples[i])); v.setInt16(off,s<0?s*0x8000:s*0x7FFF,true); off+=2; }
+  return new Blob([v],{type:"audio/wav"});
+}
+async function azureStt(){
+  var wav=sttCollect(); if(!wav) return "";
+  try{
+    var b64=await blobToBase64(wav);
+    var r=await fetch("/.netlify/functions/api?route=stt",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({audioBase64:b64})});
+    var d=await r.json().catch(()=>({}));
+    return (d&&d.ok&&d.text)?d.text:"";
+  }catch(e){ return ""; }
+}
 
 /* ====================== LAGRE SAMTALE ====================== */
 async function saveSession(f,audioBlob,transcript){
