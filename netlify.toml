@@ -1,0 +1,39 @@
+// Proxy mot Anthropic Messages API. Nøkkelen ligger trygt server-side.
+export default async (req) => {
+  if (req.method !== "POST") return json({ error: { message: "Method not allowed" } }, 405);
+
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) return json({ error: { message: "Mangler ANTHROPIC_API_KEY i Netlify-miljøvariabler." } }, 500);
+
+  let body;
+  try { body = await req.json(); }
+  catch { return json({ error: { message: "Ugyldig forespørsel." } }, 400); }
+
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model: body.model || "claude-sonnet-4-6",
+        max_tokens: body.max_tokens || 1000,
+        system: body.system,
+        messages: body.messages
+      })
+    });
+    const data = await r.json();
+    return json(data, r.status);
+  } catch (e) {
+    return json({ error: { message: "Klarte ikke nå Anthropic: " + String(e) } }, 502);
+  }
+};
+
+function json(obj, status) {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { "content-type": "application/json" }
+  });
+}

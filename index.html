@@ -1,0 +1,36 @@
+import { getStore } from "@netlify/blobs";
+
+// Lister samtaler. Vanlige brukere ser sine egne; coacher kan se alle.
+export default async (req) => {
+  if (req.method !== "POST") return j({ error: "Method not allowed" }, 405);
+  let b;
+  try { b = await req.json(); } catch { return j({ error: "Ugyldig forespørsel" }, 400); }
+  if (String(b.password || "") !== process.env.TEAM_PASSWORD) return j({ error: "unauthorized" }, 401);
+
+  const coaches = (process.env.COACH_NAMES || "magnus,kevin")
+    .toLowerCase().split(",").map(s => s.trim()).filter(Boolean);
+  const isCoach = coaches.includes(String(b.name || "").trim().toLowerCase());
+  const wantsAll = b.scope === "all" && isCoach;
+
+  const store = getStore("sessions");
+  const prefix = wantsAll ? "meta/" : `meta/${safe(b.name || "")}/`;
+
+  let rows = [];
+  try {
+    const { blobs } = await store.list({ prefix });
+    for (const bl of blobs) {
+      try {
+        const m = await store.get(bl.key, { type: "json" });
+        if (m) rows.push({ key: bl.key, name: m.name, ts: m.ts, difficulty: m.difficulty, meeting: m.meeting, score: m.score, selger: m.selger, hasAudio: m.hasAudio });
+      } catch (e) { /* hopp over korrupt rad */ }
+    }
+  } catch (e) {
+    return j({ error: "Klarte ikke lese arkivet: " + String(e) }, 502);
+  }
+
+  rows.sort((a, b2) => (b2.ts || 0) - (a.ts || 0));
+  return j({ ok: true, rows, coach: isCoach }, 200);
+};
+
+function safe(s) { return String(s).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40) || "ukjent"; }
+function j(o, s) { return new Response(JSON.stringify(o), { status: s, headers: { "content-type": "application/json" } }); }
